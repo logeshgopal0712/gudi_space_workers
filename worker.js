@@ -56,13 +56,13 @@ export default {
           const domain = url.searchParams.get("domain");
 
           if (email) {
-            result = await env.testbdb
+            result = await env.gudispacedb
               .prepare("SELECT * FROM testtbl WHERE email = ?")
               .bind(email)
               .first();
 
           } else if (domain) {
-            result = await env.testbdb
+            result = await env.gudispacedb
               .prepare("SELECT * FROM testtbl WHERE domain = ?")
               .bind(domain)
               .first();
@@ -70,7 +70,7 @@ export default {
           }
           else
           {
-            result = await env.testbdb
+            result = await env.gudispacedb
             .prepare("SELECT * FROM testtbl")
             .all();
           }
@@ -85,7 +85,7 @@ export default {
         {
           const body = await request.json();
 
-          const result = await env.testbdb
+          const result = await env.gudispacedb
             .prepare(
               "INSERT INTO testtbl (name, email, domain) VALUES (?, ?, ?)"
             )
