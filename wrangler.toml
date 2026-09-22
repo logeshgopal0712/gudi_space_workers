@@ -1,0 +1,4 @@
+name = "gudi-space-workers"
+main = "worker.js"
+compatibility_date = "2026-09-21"
+
