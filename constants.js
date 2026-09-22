@@ -17,10 +17,10 @@ export function knownError(errorMessage)
 }
 
 export const CONSTANTS = {
-  CF_ACCOUNT_ID : "9171502d93ce6d0dc734a387010b2365",
-  CF_PAGES_PROJECT_NAME : "cloudflaretest",
+  CF_ACCOUNT_ID : "895e02431e52b6df4db2fb26db4a3c3a",
+  CF_PAGES_PROJECT_NAME : "gudi-space-generated",
   GITHUB_OWNER : "logeshgopal0712",
-  GITHUB_REPO : "cloudflareTest",
+  GITHUB_REPO : "gudi_space_generated",
   FILE_PATH : "data/data.json",          // path to the file inside the repo
-  PAGES_PROJECT : "cloudflaretest-aa3.pages.dev" // e.g. "my-site" -> my-site.pages.dev
+  PAGES_PROJECT : "gudi-space-generated.pages.dev" // e.g. "my-site" -> my-site.pages.dev
 };
