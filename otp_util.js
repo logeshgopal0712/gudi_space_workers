@@ -12,10 +12,23 @@ async function generateAndSendOtp(env, email) {
       "Content-Type": "application/json"
     },
     body: JSON.stringify({
-      from: "onboarding@resend.dev",
+      from: "verify@gudispace.com",
       to: email,
-      subject: "Your OTP Code",
-      html: `<p>Your OTP is <b>${otp}</b>. It expires in 5 minutes.</p>`
+      subject: "Your Gudispace verification code",
+      html: `<div style="font-family: -apple-system, Arial, sans-serif; max-width: 480px; margin: 0 auto; padding: 32px 24px; background-color: #ffffff;">
+      <h2 style="color: #1877F2; font-size: 20px; margin-bottom: 8px;">Gudispace</h2>
+      <p style="color: #4b5563; font-size: 15px; line-height: 1.5; margin-bottom: 24px;">
+        Use the code below to verify your email address.
+      </p>
+      <div style="background-color: #e7f0fd; border-radius: 8px; padding: 20px; text-align: center; margin-bottom: 24px;">
+        <span style="font-size: 32px; font-weight: 700; letter-spacing: 8px; color: #1877F2;">${otp}</span>
+      </div>
+      <p style="color: #6b7280; font-size: 13px; line-height: 1.5;">
+        This code expires in 5 minutes. If you didn't request this, you can safely ignore this email.
+      </p>
+      <hr style="border: none; border-top: 1px solid #e5e7eb; margin: 24px 0;">
+      <p style="color: #9ca3af; font-size: 12px;">Gudispace · gudispace.com</p>
+    </div>`
     })
   });
 
