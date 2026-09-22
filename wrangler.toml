@@ -2,3 +2,11 @@ name = "gudi-space-workers"
 main = "worker.js"
 compatibility_date = "2026-09-21"
 
+[[d1_databases]]
+binding = "gudispacedb"
+database_name = "gudispacedb"
+database_id = "892b83dd-8c4d-47de-92a0-cd494a7b3e63"
+
+[[kv_namespaces]]
+binding = "OTP_STORE"
+id = "ef69a2fc7c1941dfa1624fc49ecb721e"
