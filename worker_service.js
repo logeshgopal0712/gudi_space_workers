@@ -2,9 +2,9 @@ import { ERROR_CODES } from "./constants.js";
 import { get_headers, createBranchAndUpdateFile, getDataJsonFromBranch, extractAndUploadImages, updateMetadatafile, deleteBranchFromGithub , constructBranchNameFromCompanyName } from "./website_github_util.js";
 import { insertSiteRecord, getBranchNameByEmail, getPageLinkByEmail, updateSiteRecord, updateSiteRecordAsDeleted, isemailAlreadyHasSiteAndActive, branchExistsAndActive, deleteSiteRecord } from "./website_db.js";
 import { verifyOtp } from "./otp_util.js";
-import { deletePagesDeploymentForBranch } from "./website_cloudflare_util.js";
+import { deletePagesDeploymentForBranch, addCustomDomainForBranch, removeCustomDomainForBranch } from "./website_cloudflare_util.js";
 
-function isValidStringField(field) 
+function isValidStringField(field)
 {
   if (typeof field !== "string" || field.trim() === "") {
     return false;
@@ -42,7 +42,7 @@ export async function generatePost(request, env) {
     throw new Error(ERROR_CODES.INVALID_COMPANY_NAME);
   }
 
-  if (await isemailAlreadyHasSiteAndActive(env, email)) 
+  if (await isemailAlreadyHasSiteAndActive(env, email))
   {
     throw new Error(ERROR_CODES.EMAIL_ALREADY_USED);
   }
@@ -54,7 +54,7 @@ export async function generatePost(request, env) {
     throw new Error(ERROR_CODES.COMPANY_ALREADY_USED);
   }
 
-  try 
+  try
   {
     console.log("Create: Trying to delete site record if already exists for :", safeBranchName);
 
@@ -66,25 +66,29 @@ export async function generatePost(request, env) {
 
     console.log("Create: Created branch and updated file :", safeBranchName);
 
-    await insertSiteRecord(env, safeBranchName, data, result.previewUrl);
+    const customUrl = await addCustomDomainForBranch(env, safeBranchName);
 
-    console.log("Create: Inserted site record :", safeBranchName + " , previewUrl: " + result.previewUrl);
+    console.log("Create: Added custom domain :", customUrl);
 
-    return result.previewUrl;
+    await insertSiteRecord(env, safeBranchName, data, customUrl);
+
+    console.log("Create: Inserted site record :", safeBranchName + " , previewUrl: " + customUrl);
+
+    return customUrl;
   }
-  catch (err) 
+  catch (err)
   {
     throw new Error(err.message);
   }
 }
 
-export async function generateGet(request, env) 
+export async function generateGet(request, env)
 {
   try
   {
     const url = new URL(request.url);
     const email = url.searchParams.get("email");
-    
+
     if (!isValidStringField(email))
     {
       throw new Error(ERROR_CODES.INVALID_EMAIL);
@@ -101,7 +105,7 @@ export async function generateGet(request, env)
 
     return data;
   }
-  catch (err) 
+  catch (err)
   {
     console.log("Get error: " + err.message);
     throw new Error(err.message);
@@ -113,7 +117,7 @@ export async function generatePut(request, env) {
   let body;
   try {
     body = await request.json();
-  } catch (err) 
+  } catch (err)
   {
     throw new Error("Invalid JSON");
   }
@@ -129,14 +133,14 @@ export async function generatePut(request, env) {
 
   await verifyOtp(env, email, otp);
 
-  try 
+  try
   {
     const branchName = await getBranchNameByEmail(env, email);
     if (!isValidStringField(branchName))
     {
       throw new Error(ERROR_CODES.NO_COMPANY_EXISTS_FOR_EMAIL);
     }
-    
+
     const cleanedData = await extractAndUploadImages(env, branchName, data);
     const headers = await get_headers(env);
 
@@ -147,7 +151,7 @@ export async function generatePut(request, env) {
     const page_link = await getPageLinkByEmail(env, email);
 
     return page_link;
-  } 
+  }
   catch (err) {
     throw new Error(err.message);
   }
@@ -165,28 +169,32 @@ export async function generateDelete(request, env) {
     }
 
     await verifyOtp(env, email, otp);
-    
+
     const branchName = await getBranchNameByEmail(env, email);
 
     if (!isValidStringField(branchName))
     {
       throw new Error(ERROR_CODES.NO_COMPANY_EXISTS_FOR_EMAIL);
     }
- 
+
     // 2. Delete the branch on GitHub (also takes down the Pages preview)
     const headers = await get_headers(env);
     await deleteBranchFromGithub(headers, branchName);
- 
+
     console.log("Delete: Deleted github branch:", branchName);
 
     await deletePagesDeploymentForBranch(env, branchName);
 
     console.log("Delete: Deleted deployment from cloud flare for branch:", branchName);
 
+    await removeCustomDomainForBranch(env, branchName);
+
+    console.log("Delete: Removed custom domain from cloud flare for branch:", branchName);
+
     // 3. Mark the DB row as deleted (soft delete, keeps history)
     await updateSiteRecordAsDeleted(env, email);
   }
-  catch (err) 
+  catch (err)
   {
     throw new Error(err.message);
   }

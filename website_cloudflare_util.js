@@ -9,7 +9,7 @@
 import { CONSTANTS } from "./constants.js";
 
 async function getCfHeaders(env) {
-  if (!env.CLOUDFLARE_API_TOKEN) 
+  if (!env.CLOUDFLARE_API_TOKEN)
   {
     console.log("getCfHeaders: CLOUDFLARE_API_TOKEN is not set as a Worker secret");
     throw new Error("CLOUDFLARE_API_TOKEN is not set as a Worker secret");
@@ -54,5 +54,93 @@ export async function deletePagesDeploymentForBranch(env, branchName) {
       console.log("deletePagesDeploymentForBranch: Failed to delete for deployementId: " + deployment.id);
       throw new Error(`Failed to delete deployment ${deployment.id}: ${await delRes.text()}`);
     }
+  }
+}
+
+// ---------------------------------------------------------
+// Adds a custom domain (branchName.gudispace.com) to the Pages project,
+// then creates the DNS CNAME record pointing it at that branch's
+// auto-generated Pages preview (branchName.<PAGES_PROJECT>).
+// Requires env.CLOUDFLARE_API_TOKEN with Pages:Edit + DNS:Edit permissions,
+// and CONSTANTS.ROOT_DOMAIN + CONSTANTS.CF_ZONE_ID set.
+// ---------------------------------------------------------
+export async function addCustomDomainForBranch(env, branchName) {
+  const headers = await getCfHeaders(env);
+  const customDomain = `${branchName}.${CONSTANTS.ROOT_DOMAIN}`;
+  const pagesTarget = `${branchName}.${CONSTANTS.PAGES_PROJECT}`;
+
+  // 1. Register the custom domain on the Pages project
+  const domainRes = await fetch(
+    `https://api.cloudflare.com/client/v4/accounts/${CONSTANTS.CF_ACCOUNT_ID}/pages/projects/${CONSTANTS.CF_PAGES_PROJECT_NAME}/domains`,
+    {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ name: customDomain })
+    }
+  );
+  if (!domainRes.ok) {
+    const err = await domainRes.text();
+    console.log("addCustomDomainForBranch: Failed to add Pages custom domain:", err);
+    throw new Error(`Failed to add custom domain: ${err}`);
+  }
+
+  // 2. Create the DNS CNAME record pointing at the branch's Pages preview
+  const dnsRes = await fetch(
+    `https://api.cloudflare.com/client/v4/zones/${CONSTANTS.CF_ZONE_ID}/dns_records`,
+    {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        type: "CNAME",
+        name: customDomain,
+        content: pagesTarget,
+        proxied: true
+      })
+    }
+  );
+  if (!dnsRes.ok) {
+    const err = await dnsRes.text();
+    console.log("addCustomDomainForBranch: Failed to create DNS record:", err);
+    throw new Error(`Failed to create DNS record: ${err}`);
+  }
+
+  return `https://${customDomain}`;
+}
+
+// ---------------------------------------------------------
+// Removes the custom domain and its DNS record for a branch that's
+// being deleted. Safe to call even if either one is already gone.
+// ---------------------------------------------------------
+export async function removeCustomDomainForBranch(env, branchName) {
+  const headers = await getCfHeaders(env);
+  const customDomain = `${branchName}.${CONSTANTS.ROOT_DOMAIN}`;
+
+  // 1. Find and delete the DNS record for this custom domain
+  const listRes = await fetch(
+    `https://api.cloudflare.com/client/v4/zones/${CONSTANTS.CF_ZONE_ID}/dns_records?name=${customDomain}`,
+    { headers }
+  );
+  if (listRes.ok) {
+    const listData = await listRes.json();
+    for (const record of listData.result) {
+      const delRes = await fetch(
+        `https://api.cloudflare.com/client/v4/zones/${CONSTANTS.CF_ZONE_ID}/dns_records/${record.id}`,
+        { method: "DELETE", headers }
+      );
+      if (!delRes.ok) {
+        console.log("removeCustomDomainForBranch: Failed to delete DNS record:", await delRes.text());
+      }
+    }
+  } else {
+    console.log("removeCustomDomainForBranch: Failed to list DNS records:", await listRes.text());
+  }
+
+  // 2. Remove the custom domain from the Pages project
+  const domainDelRes = await fetch(
+    `https://api.cloudflare.com/client/v4/accounts/${CONSTANTS.CF_ACCOUNT_ID}/pages/projects/${CONSTANTS.CF_PAGES_PROJECT_NAME}/domains/${customDomain}`,
+    { method: "DELETE", headers }
+  );
+  if (!domainDelRes.ok && domainDelRes.status !== 404) {
+    console.log("removeCustomDomainForBranch: Failed to remove Pages custom domain:", await domainDelRes.text());
   }
 }

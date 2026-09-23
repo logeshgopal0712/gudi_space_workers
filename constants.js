@@ -22,5 +22,7 @@ export const CONSTANTS = {
   GITHUB_OWNER : "logeshgopal0712",
   GITHUB_REPO : "gudi_space_generated",
   FILE_PATH : "data/data.json",          // path to the file inside the repo
-  PAGES_PROJECT : "gudi-space-generated.pages.dev" // e.g. "my-site" -> my-site.pages.dev
+  PAGES_PROJECT : "gudi-space-generated.pages.dev", // e.g. "my-site" -> my-site.pages.dev
+  ROOT_DOMAIN : "gudispace.com",          // each generated site becomes <branch>.gudispace.com
+  CF_ZONE_ID : "1bd64f54437e92945cac19c12068f3d3"  // find in Cloudflare dashboard: click into gudispace.com zone overview, right sidebar shows "Zone ID"
 };
