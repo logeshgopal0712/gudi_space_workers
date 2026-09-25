@@ -3,7 +3,7 @@ import { get_headers, createBranchAndUpdateFile, getDataJsonFromBranch, extractA
 import { insertSiteRecord, getBranchNameByEmail, getPageLinkByEmail, updateSiteRecord, updateSiteRecordAsDeleted, isemailAlreadyHasSiteAndActive, branchExistsAndActive, deleteSiteRecord } from "./website_db.js";
 import { verifyOtp } from "./otp_util.js";
 import { deletePagesDeploymentForBranch, addCustomDomainForBranch, removeCustomDomainForBranch, getPagesDeploymentStatus } from "./website_cloudflare_util.js";
-import { generatePollToken, getBranchForPollToken } from "./poll_token_util.js";
+import { generatePollToken, getPollTokenTarget } from "./poll_token_util.js";
 
 function isValidStringField(field)
 {
@@ -71,7 +71,7 @@ export async function generatePost(request, env) {
     const result = await createBranchAndUpdateFile(env, safeBranchName, data);
     branchCreated = true;
 
-    console.log("Create: Created branch and updated file :", safeBranchName);
+    console.log("Create: Created branch and updated file :", safeBranchName, ", commit:", result.commitSha);
 
     const customUrl = await addCustomDomainForBranch(env, safeBranchName);
     domainCreated = true;
@@ -81,11 +81,13 @@ export async function generatePost(request, env) {
     // Issue a short-lived poll token so the frontend can check build
     // status itself via "/api/generateStatus" instead of the API blocking
     // here - this is what closes the 522 timing gap without making the
-    // customer stare at a frozen "Create" button.
+    // customer stare at a frozen "Create" button. Carries the exact
+    // data.json commit SHA so the status check can't lock onto an earlier
+    // deployment of this same (brand new) branch - see getPagesDeploymentStatus.
     let pollToken = null;
     try
     {
-      pollToken = await generatePollToken(env, safeBranchName);
+      pollToken = await generatePollToken(env, safeBranchName, result.commitSha);
     }
     catch (tokenErr)
     {
@@ -199,7 +201,7 @@ export async function generatePut(request, env) {
     const cleanedData = await extractAndUploadImages(env, branchName, data);
     const headers = await get_headers(env);
 
-    await updateMetadatafile(cleanedData, branchName, headers);
+    const commitSha = await updateMetadatafile(cleanedData, branchName, headers);
 
     await updateSiteRecord(env, email, data);
 
@@ -207,11 +209,13 @@ export async function generatePut(request, env) {
 
     // Editing a site re-triggers a Pages build for that branch too, so
     // hand back a poll token here as well - same "/api/generateStatus"
-    // flow the frontend already uses after create.
+    // flow the frontend already uses after create. Same commit-SHA
+    // reasoning as create: image uploads are separate commits too, so
+    // pin to the exact commit that carries this edit's real data.json.
     let pollToken = null;
     try
     {
-      pollToken = await generatePollToken(env, branchName);
+      pollToken = await generatePollToken(env, branchName, commitSha);
     }
     catch (tokenErr)
     {
@@ -279,14 +283,14 @@ export async function generateStatusGet(request, env) {
       throw new Error("token is required");
     }
 
-    const branchName = await getBranchForPollToken(env, token);
+    const target = await getPollTokenTarget(env, token);
 
-    if (!isValidStringField(branchName))
+    if (!target || !isValidStringField(target.branchName))
     {
       throw new Error("Invalid or expired token");
     }
 
-    const { ready, status } = await getPagesDeploymentStatus(env, branchName);
+    const { ready, status } = await getPagesDeploymentStatus(env, target.branchName, target.commitSha);
 
     return { ready, status };
   }

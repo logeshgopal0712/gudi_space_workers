@@ -167,6 +167,14 @@ export async function updateMetadatafile(cleanedData /*json with no src data for
   if (!updateRes.ok) {
     throw new Error(`Failed to update file: ${await updateRes.text()}`);
   }
+
+  // Hand back the commit SHA for this exact data.json write, so callers
+  // can poll for the Pages deployment built from THIS commit specifically -
+  // branch creation and each image upload are separate commits too, each
+  // triggering their own build, so "some deployment for this branch" can
+  // resolve to an earlier one that still has main's blank data.json.
+  const updateInfo = await updateRes.json();
+  return updateInfo?.commit?.sha || null;
 }
 
 export async function createBranchAndUpdateFile(env, branchName, data) {
@@ -211,12 +219,12 @@ export async function createBranchAndUpdateFile(env, branchName, data) {
   const cleanedData = await extractAndUploadImages(env, branchName, data);
 
   // 3a. update metadata file. if already exists, fetch first and update.
-  await updateMetadatafile(cleanedData, branchName, headers);
+  const commitSha = await updateMetadatafile(cleanedData, branchName, headers);
 
   // 4. Build the preview URL Cloudflare Pages will auto-generate for this branch
   const previewUrl = `https://${branchName}.${CONSTANTS.PAGES_PROJECT}`;
 
-  return { previewUrl };
+  return { previewUrl, commitSha };
 }
 /*
 export async function getDataJsonFromBranch(env, branchName) {
