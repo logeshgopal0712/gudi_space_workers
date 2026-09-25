@@ -3,7 +3,7 @@ import { get_headers, createBranchAndUpdateFile, getDataJsonFromBranch, extractA
 import { insertSiteRecord, getBranchNameByEmail, getPageLinkByEmail, updateSiteRecord, updateSiteRecordAsDeleted, isemailAlreadyHasSiteAndActive, branchExistsAndActive, deleteSiteRecord } from "./website_db.js";
 import { verifyOtp } from "./otp_util.js";
 import { deletePagesDeploymentForBranch, addCustomDomainForBranch, removeCustomDomainForBranch, getPagesDeploymentStatus } from "./website_cloudflare_util.js";
-import { generatePollToken, isPollTokenValidForBranch } from "./poll_token_util.js";
+import { generatePollToken, getBranchForPollToken } from "./poll_token_util.js";
 
 function isValidStringField(field)
 {
@@ -272,22 +272,16 @@ export async function generateStatusGet(request, env) {
   try
   {
     const url = new URL(request.url);
-    const branchName = url.searchParams.get("branch");
     const token = url.searchParams.get("token");
-
-    if (!isValidStringField(branchName))
-    {
-      throw new Error("branch is required");
-    }
 
     if (!isValidStringField(token))
     {
       throw new Error("token is required");
     }
 
-    const isValidToken = await isPollTokenValidForBranch(env, token, branchName);
+    const branchName = await getBranchForPollToken(env, token);
 
-    if (!isValidToken)
+    if (!isValidStringField(branchName))
     {
       throw new Error("Invalid or expired token");
     }

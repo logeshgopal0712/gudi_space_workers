@@ -18,10 +18,10 @@ export async function generatePollToken(env, branchName) {
   return token;
 }
 
-export async function isPollTokenValidForBranch(env, token, branchName) {
-  if (!token || !branchName) {
-    return false;
+export async function getBranchForPollToken(env, token) {
+  if (!token) {
+    return null;
   }
-  const storedBranch = await env.OTP_STORE.get(`${TOKEN_PREFIX}${token}`);
-  return storedBranch === branchName;
+  const branchName = await env.OTP_STORE.get(`${TOKEN_PREFIX}${token}`);
+  return branchName || null;
 }
