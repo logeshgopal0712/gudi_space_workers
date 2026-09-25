@@ -12,7 +12,7 @@
 
 import { knownError } from "./constants.js";
 import { generateOtpPost } from "./otp_util.js";
-import { generatePost, generateGet, generatePut , generateDelete } from "./worker_service.js";
+import { generatePost, generateGet, generatePut , generateDelete, generateStatusGet } from "./worker_service.js";
 
 function corsHeaders() {
   return {
@@ -26,7 +26,7 @@ function handleResponse(resp){
   let response = new Response(JSON.stringify(resp),{
     headers: { "Content-Type": "application/json" }
   });
-  
+
   const newHeaders = new Headers(response.headers);
   Object.entries(corsHeaders()).forEach(([k, v]) => newHeaders.set(k, v));
   return new Response(response.body, { status: response.status, headers: newHeaders });
@@ -74,7 +74,7 @@ export default {
             .prepare("SELECT * FROM testtbl")
             .all();
           }
-          
+
           return new Response(JSON.stringify(result), {
             headers: {
               "Content-Type": "application/json"
@@ -91,7 +91,7 @@ export default {
             )
             .bind(body.name, body.email, body.domain)
             .run();
-          
+
           return Response.json({
             success: true,
             id: result.meta.last_row_id
@@ -104,11 +104,13 @@ export default {
       {
         try
         {
-          const previewUrl = await generatePost(request, env);
+          const result = await generatePost(request, env);
 
           resp = {
             success: true,
-            previewUrl: previewUrl,
+            previewUrl: result.previewUrl,
+            branch: result.branch,
+            token: result.token,
             message: "Success in creating website."
           }
 
@@ -124,11 +126,13 @@ export default {
       {
         try
         {
-          const previewUrl = await generatePut(request, env);
+          const result = await generatePut(request, env);
 
           resp = {
             success: true,
-            previewUrl: previewUrl,
+            previewUrl: result.previewUrl,
+            branch: result.branch,
+            token: result.token,
             message: "Success in modifying website."
           }
 
@@ -179,6 +183,25 @@ export default {
           throw error;
         }
       }
+      else if (url.pathname == "/api/generateStatus" && request.method == "GET")
+      {
+        try
+        {
+          const result = await generateStatusGet(request, env);
+
+          resp = {
+            success: true,
+            ready: result.ready,
+            status: result.status,
+            message: "Success in checking website status."
+          }
+        }
+        catch(error)
+        {
+          message = "Failed to check website status.";
+          throw error;
+        }
+      }
       else if (url.pathname == "/api/generateOtp" && request.method == "POST")
       {
         try
@@ -215,5 +238,4 @@ export default {
     return handleResponse(resp);
   }
 }
-
 

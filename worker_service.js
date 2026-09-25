@@ -2,7 +2,8 @@ import { ERROR_CODES } from "./constants.js";
 import { get_headers, createBranchAndUpdateFile, getDataJsonFromBranch, extractAndUploadImages, updateMetadatafile, deleteBranchFromGithub , constructBranchNameFromCompanyName } from "./website_github_util.js";
 import { insertSiteRecord, getBranchNameByEmail, getPageLinkByEmail, updateSiteRecord, updateSiteRecordAsDeleted, isemailAlreadyHasSiteAndActive, branchExistsAndActive, deleteSiteRecord } from "./website_db.js";
 import { verifyOtp } from "./otp_util.js";
-import { deletePagesDeploymentForBranch, addCustomDomainForBranch, removeCustomDomainForBranch } from "./website_cloudflare_util.js";
+import { deletePagesDeploymentForBranch, addCustomDomainForBranch, removeCustomDomainForBranch, getPagesDeploymentStatus } from "./website_cloudflare_util.js";
+import { generatePollToken, isPollTokenValidForBranch } from "./poll_token_util.js";
 
 function isValidStringField(field)
 {
@@ -54,6 +55,11 @@ export async function generatePost(request, env) {
     throw new Error(ERROR_CODES.COMPANY_ALREADY_USED);
   }
 
+  // Tracks which side effects have actually happened, so the catch block
+  // below knows exactly what needs to be rolled back if a later step fails.
+  let branchCreated = false;
+  let domainCreated = false;
+
   try
   {
     console.log("Create: Trying to delete site record if already exists for :", safeBranchName);
@@ -63,21 +69,70 @@ export async function generatePost(request, env) {
     console.log("Create: Deleted site record if already exists for :", safeBranchName);
 
     const result = await createBranchAndUpdateFile(env, safeBranchName, data);
+    branchCreated = true;
 
     console.log("Create: Created branch and updated file :", safeBranchName);
 
     const customUrl = await addCustomDomainForBranch(env, safeBranchName);
+    domainCreated = true;
 
     console.log("Create: Added custom domain :", customUrl);
+
+    // Issue a short-lived poll token so the frontend can check build
+    // status itself via "/api/generateStatus" instead of the API blocking
+    // here - this is what closes the 522 timing gap without making the
+    // customer stare at a frozen "Create" button.
+    let pollToken = null;
+    try
+    {
+      pollToken = await generatePollToken(env, safeBranchName);
+    }
+    catch (tokenErr)
+    {
+      console.log("Create: Failed to generate poll token for:", safeBranchName, "-", tokenErr.message);
+    }
 
     await insertSiteRecord(env, safeBranchName, data, customUrl);
 
     console.log("Create: Inserted site record :", safeBranchName + " , previewUrl: " + customUrl);
 
-    return customUrl;
+    return { previewUrl: customUrl, branch: safeBranchName, token: pollToken };
   }
   catch (err)
   {
+    console.log("Create: Failed for", safeBranchName, "- rolling back. Reason:", err.message);
+
+    // Undo whatever side effects already happened, in reverse order, so we
+    // never leave an orphaned custom domain/DNS record or GitHub branch
+    // behind with no matching DB row (which would also permanently block
+    // retrying the same company name, since the branch would still exist).
+    if (domainCreated)
+    {
+      try
+      {
+        await removeCustomDomainForBranch(env, safeBranchName);
+        console.log("Create: Rollback - removed custom domain for:", safeBranchName);
+      }
+      catch (rollbackErr)
+      {
+        console.log("Create: Rollback failed to remove custom domain for:", safeBranchName, "-", rollbackErr.message);
+      }
+    }
+
+    if (branchCreated)
+    {
+      try
+      {
+        const headers = await get_headers(env);
+        await deleteBranchFromGithub(headers, safeBranchName);
+        console.log("Create: Rollback - deleted github branch for:", safeBranchName);
+      }
+      catch (rollbackErr)
+      {
+        console.log("Create: Rollback failed to delete github branch for:", safeBranchName, "-", rollbackErr.message);
+      }
+    }
+
     throw new Error(err.message);
   }
 }
@@ -150,7 +205,20 @@ export async function generatePut(request, env) {
 
     const page_link = await getPageLinkByEmail(env, email);
 
-    return page_link;
+    // Editing a site re-triggers a Pages build for that branch too, so
+    // hand back a poll token here as well - same "/api/generateStatus"
+    // flow the frontend already uses after create.
+    let pollToken = null;
+    try
+    {
+      pollToken = await generatePollToken(env, branchName);
+    }
+    catch (tokenErr)
+    {
+      console.log("Modify: Failed to generate poll token for:", branchName, "-", tokenErr.message);
+    }
+
+    return { previewUrl: page_link, branch: branchName, token: pollToken };
   }
   catch (err) {
     throw new Error(err.message);
@@ -193,6 +261,40 @@ export async function generateDelete(request, env) {
 
     // 3. Mark the DB row as deleted (soft delete, keeps history)
     await updateSiteRecordAsDeleted(env, email);
+  }
+  catch (err)
+  {
+    throw new Error(err.message);
+  }
+}
+
+export async function generateStatusGet(request, env) {
+  try
+  {
+    const url = new URL(request.url);
+    const branchName = url.searchParams.get("branch");
+    const token = url.searchParams.get("token");
+
+    if (!isValidStringField(branchName))
+    {
+      throw new Error("branch is required");
+    }
+
+    if (!isValidStringField(token))
+    {
+      throw new Error("token is required");
+    }
+
+    const isValidToken = await isPollTokenValidForBranch(env, token, branchName);
+
+    if (!isValidToken)
+    {
+      throw new Error("Invalid or expired token");
+    }
+
+    const { ready, status } = await getPagesDeploymentStatus(env, branchName);
+
+    return { ready, status };
   }
   catch (err)
   {

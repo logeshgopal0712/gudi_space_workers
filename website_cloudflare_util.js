@@ -144,3 +144,39 @@ export async function removeCustomDomainForBranch(env, branchName) {
     console.log("removeCustomDomainForBranch: Failed to remove Pages custom domain:", await domainDelRes.text());
   }
 }
+
+// ---------------------------------------------------------
+// Single, non-looping check of a branch's Pages deployment status.
+// Used by the "/api/generateStatus" poll endpoint - the frontend calls
+// this repeatedly (every few seconds) and drives its own timer/stage
+// UI, instead of the Worker blocking a single request for a long time.
+//
+// Returns { ready, status }:
+//   ready  - true only once latest_stage.status is "success"
+//   status - the raw stage status ("active"/"idle"/"success"/"failure"/
+//            "canceled"), or "pending" if the deployment hasn't shown
+//            up in the list yet (e.g. called right after branch creation).
+// ---------------------------------------------------------
+export async function getPagesDeploymentStatus(env, branchName) {
+  const headers = await getCfHeaders(env);
+
+  const listRes = await fetch(
+    `https://api.cloudflare.com/client/v4/accounts/${CONSTANTS.CF_ACCOUNT_ID}/pages/projects/${CONSTANTS.CF_PAGES_PROJECT_NAME}/deployments`,
+    { headers }
+  );
+
+  if (!listRes.ok) {
+    console.log("getPagesDeploymentStatus: failed to list deployments:", await listRes.text());
+    throw new Error("Failed to check deployment status");
+  }
+
+  const listData = await listRes.json();
+  const deployment = listData.result.find(
+    (d) => d.deployment_trigger?.metadata?.branch === branchName
+  );
+
+  const status = deployment?.latest_stage?.status || "pending";
+  const ready = status === "success";
+
+  return { ready, status };
+}
