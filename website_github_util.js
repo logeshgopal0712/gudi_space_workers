@@ -22,22 +22,26 @@ export function constructBranchNameFromCompanyName(companyName)
 
 // Decodes a base64 data URL ("data:image/jpeg;base64,....") and commits it
 // to the given path on the given branch via GitHub's contents API.
-async function uploadImageToGithub(headers, branchName, path, dataUrl) {
+async function uploadImageToGithub(headers, branchName, path, dataUrl, { checkExisting = true } = {}) {
   // dataUrl looks like: data:image/jpeg;base64,AAAA....
   const base64Content = dataUrl.split(",")[1];
   if (!base64Content) {
     throw new Error(`Invalid image data for path ${path}`);
   }
 
-  // Check if file already exists on this branch (only matters if branch was reused)
+  // Check if file already exists on this branch. Skipped entirely on a
+  // brand-new create branch (checkExisting: false) - nothing can already
+  // be there, so this GET is pure wasted latency in that case.
   let existingSha = null;
-  const existingRes = await fetch(
-    `https://api.github.com/repos/${CONSTANTS.GITHUB_OWNER}/${CONSTANTS.GITHUB_REPO}/contents/${path}?ref=${branchName}`,
-    { headers }
-  );
-  if (existingRes.ok) {
-    const existingInfo = await existingRes.json();
-    existingSha = existingInfo.sha;
+  if (checkExisting) {
+    const existingRes = await fetch(
+      `https://api.github.com/repos/${CONSTANTS.GITHUB_OWNER}/${CONSTANTS.GITHUB_REPO}/contents/${path}?ref=${branchName}`,
+      { headers }
+    );
+    if (existingRes.ok) {
+      const existingInfo = await existingRes.json();
+      existingSha = existingInfo.sha;
+    }
   }
 
   const putBody = {
@@ -63,12 +67,39 @@ async function uploadImageToGithub(headers, branchName, path, dataUrl) {
   }
 }
 
+// Runs job(item) over items with at most `limit` running at once. Stops
+// launching new work after the first failure (in-flight jobs are allowed
+// to settle) and rethrows it - same fail-fast behavior as a sequential
+// for-loop, just parallelized for the happy path.
+async function runWithConcurrency(items, limit, job) {
+  let nextIndex = 0;
+  let firstError = null;
+
+  async function worker() {
+    while (nextIndex < items.length) {
+      if (firstError) return;
+      const current = nextIndex++;
+      try {
+        await job(items[current], current);
+      } catch (err) {
+        if (!firstError) firstError = err;
+        return;
+      }
+    }
+  }
+
+  const workerCount = Math.max(1, Math.min(limit, items.length));
+  await Promise.all(Array.from({ length: workerCount }, worker));
+
+  if (firstError) throw firstError;
+}
+
 // ---------------------------------------------------------
 // Extracts every {*_path, *_src} image pair from the payload,
 // uploads each image to GitHub at its given path,
 // and strips the *_src key out of the returned data object.
 // ---------------------------------------------------------
-export async function extractAndUploadImages(env, branchName, data) {
+export async function extractAndUploadImages(env, branchName, data, { isNewBranch = false } = {}) {
   const headers = await get_headers(env);
 
   // Collect every image {path, src} pair to upload, from all the known locations
@@ -114,11 +145,17 @@ export async function extractAndUploadImages(env, branchName, data) {
     });
   }
 
-  // Upload each image to GitHub (one commit per image, on the new branch)
-  for (const job of imageJobs) {
-    await uploadImageToGithub(headers, branchName, job.path, job.src);
+  // Upload each image to GitHub (one commit per image, on the branch).
+  // On a brand-new create branch, nothing can collide with anything else
+  // (each image is its own file path), so run several uploads at once and
+  // skip the existing-file check. On modify, keep the old sequential +
+  // existence-check behavior since files may already exist there.
+  await runWithConcurrency(imageJobs, isNewBranch ? 5 : 1, async (job) => {
+    await uploadImageToGithub(headers, branchName, job.path, job.src, {
+      checkExisting: !isNewBranch,
+    });
     job.clear(); // remove *_src from the data object now that it's stored
-  }
+  });
 
   return data; // same object, mutated: *_src keys removed, *_path values remain
 }
@@ -216,7 +253,7 @@ export async function createBranchAndUpdateFile(env, branchName, data) {
 
   // 2c. Extract all images from the payload, upload each one to the new branch,
   //     and strip the *_src fields out of `data` before it gets committed as JSON.
-  const cleanedData = await extractAndUploadImages(env, branchName, data);
+  const cleanedData = await extractAndUploadImages(env, branchName, data, { isNewBranch: true });
 
   // 3a. update metadata file. if already exists, fetch first and update.
   const commitSha = await updateMetadatafile(cleanedData, branchName, headers);
