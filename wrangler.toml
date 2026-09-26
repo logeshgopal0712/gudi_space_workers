@@ -21,8 +21,10 @@ database_id = "892b83dd-8c4d-47de-92a0-cd494a7b3e63"
 binding = "OTP_STORE"
 id = "ef69a2fc7c1941dfa1624fc49ecb721e"
 
-[observability]
+[observability.logs]
 enabled = true
+invocation_logs = true
 
-[previews.observability]
+[previews.observability.logs]
 enabled = true
+invocation_logs = true
