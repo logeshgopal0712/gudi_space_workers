@@ -67,33 +67,6 @@ async function uploadImageToGithub(headers, branchName, path, dataUrl, { checkEx
   }
 }
 
-// Runs job(item) over items with at most `limit` running at once. Stops
-// launching new work after the first failure (in-flight jobs are allowed
-// to settle) and rethrows it - same fail-fast behavior as a sequential
-// for-loop, just parallelized for the happy path.
-async function runWithConcurrency(items, limit, job) {
-  let nextIndex = 0;
-  let firstError = null;
-
-  async function worker() {
-    while (nextIndex < items.length) {
-      if (firstError) return;
-      const current = nextIndex++;
-      try {
-        await job(items[current], current);
-      } catch (err) {
-        if (!firstError) firstError = err;
-        return;
-      }
-    }
-  }
-
-  const workerCount = Math.max(1, Math.min(limit, items.length));
-  await Promise.all(Array.from({ length: workerCount }, worker));
-
-  if (firstError) throw firstError;
-}
-
 // ---------------------------------------------------------
 // Extracts every {*_path, *_src} image pair from the payload,
 // uploads each image to GitHub at its given path,
@@ -146,16 +119,18 @@ export async function extractAndUploadImages(env, branchName, data, { isNewBranc
   }
 
   // Upload each image to GitHub (one commit per image, on the branch).
-  // On a brand-new create branch, nothing can collide with anything else
-  // (each image is its own file path), so run several uploads at once and
-  // skip the existing-file check. On modify, keep the old sequential +
-  // existence-check behavior since files may already exist there.
-  await runWithConcurrency(imageJobs, isNewBranch ? 5 : 1, async (job) => {
+  // NOTE: these must stay sequential. GitHub's Contents API does one
+  // commit per PUT and each commit fast-forwards the branch ref - firing
+  // several PUTs at once (even at different file paths) makes them race
+  // to move that same ref, and every loser gets a 409 "is at X but
+  // expected Y" (found the hard way). Only the existence-check skip on a
+  // brand-new create branch is safe to keep.
+  for (const job of imageJobs) {
     await uploadImageToGithub(headers, branchName, job.path, job.src, {
       checkExisting: !isNewBranch,
     });
     job.clear(); // remove *_src from the data object now that it's stored
-  });
+  }
 
   return data; // same object, mutated: *_src keys removed, *_path values remain
 }
