@@ -45,8 +45,8 @@ export async function branchExistsAndActive(env, branch_name) {
 
 export async function getBranchNameByEmail(env, email) {
   const site = await env.gudispacedb
-    .prepare("SELECT branch_name FROM sites WHERE email = ?")
-    .bind(email)
+    .prepare("SELECT branch_name FROM sites WHERE email = ? and status = ?")
+    .bind(email, 'active')
     .first();
  
   if (!site) {
