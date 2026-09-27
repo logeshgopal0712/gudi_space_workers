@@ -13,17 +13,20 @@ function isValidStringField(field)
   return true;
 }
 
-export async function generatePost(request, env) {
-  // 1. Get input
-  let body;
-  try {
-    body = await request.json();
-  } catch (err) {
-    throw new Error("Invalid JSON");
-  }
-
-  const { otp, data } = body;
-
+// ---------------------------------------------------------
+// Pure sanity checks for a "create website" request - no OTP involved, no
+// side effects. Pulled out of generatePost so it can also be called (via
+// generateSanityCheckPost, below) *before* an OTP is ever sent. That way a
+// misspelled/duplicate company name or an email that already has a site
+// gets rejected up front instead of burning an OTP send-and-verify round
+// trip on a request that was always going to fail.
+//
+// Still called again at the top of generatePost itself (before verifyOtp)
+// so a state change between the precheck and the real submit (someone
+// else grabs the same company name in between, say) is still caught -
+// this is defense-in-depth, not a replacement for the real check.
+// ---------------------------------------------------------
+export async function validateCreateSanity(env, data) {
   if (!data) {
     throw new Error("data payload is required");
   }
@@ -35,8 +38,6 @@ export async function generatePost(request, env) {
   {
     throw new Error(ERROR_CODES.INVALID_EMAIL);
   }
-
-  await verifyOtp(env, email, otp);
 
   if (!isValidStringField(companyName))
   {
@@ -54,6 +55,73 @@ export async function generatePost(request, env) {
   {
     throw new Error(ERROR_CODES.COMPANY_ALREADY_USED);
   }
+
+  return { email, safeBranchName };
+}
+
+// ---------------------------------------------------------
+// Same idea for "delete website" - confirms a company actually exists for
+// the given email before the caller bothers sending an OTP for it.
+// ---------------------------------------------------------
+export async function validateDeleteSanity(env, email) {
+  if (!isValidStringField(email))
+  {
+    throw new Error(ERROR_CODES.INVALID_EMAIL);
+  }
+
+  const branchName = await getBranchNameByEmail(env, email);
+
+  if (!isValidStringField(branchName))
+  {
+    throw new Error(ERROR_CODES.NO_COMPANY_EXISTS_FOR_EMAIL);
+  }
+
+  return { branchName };
+}
+
+// ---------------------------------------------------------
+// Handler for POST /api/generateSanityCheck - runs the checks above with
+// no OTP and no side effects, so the frontend can call it right when
+// "Create website" / "Delete website" is clicked, *before* triggering an
+// OTP send. Body shape: { action: "create", data } or { action: "delete",
+// email }.
+// ---------------------------------------------------------
+export async function generateSanityCheckPost(request, env) {
+  let body;
+  try {
+    body = await request.json();
+  } catch (err) {
+    throw new Error("Invalid JSON");
+  }
+
+  const { action, data, email } = body;
+
+  if (action === "delete")
+  {
+    const { branchName } = await validateDeleteSanity(env, email);
+    return { branchName };
+  }
+
+  // Default to "create" so existing callers that don't pass `action`
+  // still work.
+  const { safeBranchName } = await validateCreateSanity(env, data);
+  return { branchName: safeBranchName };
+}
+
+export async function generatePost(request, env) {
+  // 1. Get input
+  let body;
+  try {
+    body = await request.json();
+  } catch (err) {
+    throw new Error("Invalid JSON");
+  }
+
+  const { otp, data } = body;
+
+  const { email, safeBranchName } = await validateCreateSanity(env, data);
+
+  await verifyOtp(env, email, otp);
 
   // Tracks which side effects have actually happened, so the catch block
   // below knows exactly what needs to be rolled back if a later step fails.
@@ -235,19 +303,9 @@ export async function generateDelete(request, env) {
     const email = url.searchParams.get("email");
     const otp = url.searchParams.get("otp");
 
-    if (!isValidStringField(email))
-    {
-      throw new Error(ERROR_CODES.INVALID_EMAIL);
-    }
+    const { branchName } = await validateDeleteSanity(env, email);
 
     await verifyOtp(env, email, otp);
-
-    const branchName = await getBranchNameByEmail(env, email);
-
-    if (!isValidStringField(branchName))
-    {
-      throw new Error(ERROR_CODES.NO_COMPANY_EXISTS_FOR_EMAIL);
-    }
 
     // 2. Delete the branch on GitHub (also takes down the Pages preview)
     const headers = await get_headers(env);

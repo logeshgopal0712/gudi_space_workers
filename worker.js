@@ -12,7 +12,7 @@
 
 import { knownError } from "./constants.js";
 import { generateOtpPost } from "./otp_util.js";
-import { generatePost, generateGet, generatePut , generateDelete, generateStatusGet } from "./worker_service.js";
+import { generatePost, generateGet, generatePut , generateDelete, generateStatusGet, generateSanityCheckPost } from "./worker_service.js";
 
 function corsHeaders() {
   return {
@@ -199,6 +199,24 @@ export default {
         catch(error)
         {
           message = "Failed to check website status.";
+          throw error;
+        }
+      }
+      else if (url.pathname == "/api/generateSanityCheck" && request.method == "POST")
+      {
+        try
+        {
+          const result = await generateSanityCheckPost(request, env);
+
+          resp = {
+            success: true,
+            branch: result.branchName,
+            message: ""
+          }
+        }
+        catch(error)
+        {
+          message = "Something failed. Please try in sometimes or contact team for help!";
           throw error;
         }
       }
