@@ -240,15 +240,19 @@ export default {
     catch(error)
     {
       console.log("Error: " + error.message);
-      let reason="";
-      if (knownError(error.message))
-      {
-        reason = " Reason: " + error.message;
-      }
+
+      // A known error (invalid email, company already used, no company
+      // exists for this email, etc.) is already a clear, user-facing
+      // message on its own - show just that, not the generic
+      // "Failed to ..." prefix glued in front of it. Only fall back to
+      // the generic prefix message for unexpected/unknown errors.
+      const displayMessage = knownError(error.message)
+        ? error.message
+        : message;
 
       resp = {
         success: false,
-        message: message + reason,
+        message: displayMessage,
         error_message: error.message
       }
     }
