@@ -10,7 +10,7 @@
 
 // ---- CONFIG: update these to match your setup ----
 
-import { knownError } from "./constants.js";
+import { knownError, CONSTANTS } from "./constants.js";
 import { generateOtpPost } from "./otp_util.js";
 import { generatePost, generateGet, generatePut , generateDelete, generateStatusGet, generateSanityCheckPost } from "./worker_service.js";
 import { createCheckoutSessionForStripe, createPortalSession, getPlanPricesForStripe, verifyStripeWebhookSignature, applyStripeWebhookEvent } from "./stripe_util.js";
@@ -216,10 +216,11 @@ export default {
       {
         try
         {
-          await generateDelete(request, env);
+          const result = await generateDelete(request, env);
 
           resp = {
             success: true,
+            subscriptionCanceled: result?.subscriptionCanceled || false,
             message: "Success in deleting website."
           }
 
@@ -306,6 +307,7 @@ export default {
             success: true,
             processor,
             prices,
+            freeTrialDays: CONSTANTS.FREE_TRIAL_DAYS,
             message: "Plan prices fetched."
           }
         }

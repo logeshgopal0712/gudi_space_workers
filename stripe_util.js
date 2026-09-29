@@ -134,6 +134,36 @@ export async function createPortalSession(env, { customerId, returnUrl }) {
 }
 
 // ---------------------------------------------------------
+// Cancels a subscription immediately (not at period end) - used when a
+// customer deletes their website, so they don't keep getting charged for
+// a site that no longer exists. Stripe fires customer.subscription.deleted
+// for this, which the webhook handler below already knows how to apply,
+// so our subscriptions table updates itself the normal way - no separate
+// DB write needed here.
+// ---------------------------------------------------------
+export async function cancelSubscriptionForStripe(env, subscriptionId) {
+  if (!subscriptionId) {
+    throw new Error("subscriptionId is required");
+  }
+
+  const response = await fetch(`${STRIPE_API_BASE}/subscriptions/${subscriptionId}`, {
+    method: "DELETE",
+    headers: {
+      Authorization: `Bearer ${env.STRIPE_SECRET_KEY}`,
+    },
+  });
+
+  const data = await response.json();
+
+  if (!response.ok) {
+    console.log("Stripe subscription cancellation failed:", data);
+    throw new Error(data?.error?.message || "Could not cancel the subscription.");
+  }
+
+  return data;
+}
+
+// ---------------------------------------------------------
 // Verifies a Stripe webhook's signature by hand (Workers can't use
 // Stripe's Node SDK helper). Must be called with the RAW, untouched
 // request body text - never a re-parsed/re-stringified version, or the

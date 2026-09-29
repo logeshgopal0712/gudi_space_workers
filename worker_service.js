@@ -2,7 +2,8 @@ import { ERROR_CODES, CONSTANTS } from "./constants.js";
 import { get_headers, createBranchAndUpdateFile, getDataJsonFromBranch, extractAndUploadImages, updateMetadatafile, deleteBranchFromGithub , constructBranchNameFromCompanyName } from "./website_github_util.js";
 import { upsertSiteRecord, getSiteCreatedAtByEmail, getBranchNameByEmail, getPageLinkByEmail, updateSiteRecord, updateSiteRecordAsDeleted, isemailAlreadyHasSiteAndActive, branchExistsAndActive } from "./website_db.js";
 import { verifyOtp } from "./otp_util.js";
-import { isEmailSubscriptionActive } from "./subscription_db.js";
+import { isEmailSubscriptionActive, getSubscriptionByEmail } from "./subscription_db.js";
+import { cancelSubscriptionForStripe } from "./stripe_util.js";
 import { notifySiteReadyInBackground } from "./site_email_util.js";
 import { deletePagesDeploymentForBranch, addCustomDomainForBranch, removeCustomDomainForBranch, getPagesDeploymentStatus } from "./website_cloudflare_util.js";
 import { generatePollToken, getPollTokenTarget } from "./poll_token_util.js";
@@ -338,6 +339,27 @@ export async function generateDelete(request, env) {
 
     await verifyOtp(env, email, otp);
 
+    // Deleting the site doesn't stop billing by itself - cancel any
+    // active Stripe subscription too, so nobody keeps paying for a site
+    // that no longer exists. Best-effort: a Stripe hiccup here shouldn't
+    // block the site deletion itself. Cancelling fires
+    // customer.subscription.deleted, which the webhook handler already
+    // applies to the subscriptions table - no separate DB write needed.
+    let subscriptionCanceled = false;
+    try
+    {
+      const sub = await getSubscriptionByEmail(env, email);
+      if (sub && sub.status === "active" && sub.processor === "stripe")
+      {
+        await cancelSubscriptionForStripe(env, sub.subscription_id);
+        subscriptionCanceled = true;
+      }
+    }
+    catch (subErr)
+    {
+      console.log("Delete: Failed to cancel subscription for:", email, "-", subErr.message);
+    }
+
     // 2. Delete the branch on GitHub (also takes down the Pages preview)
     const headers = await get_headers(env);
     await deleteBranchFromGithub(headers, branchName);
@@ -354,6 +376,8 @@ export async function generateDelete(request, env) {
 
     // 3. Mark the DB row as deleted (soft delete, keeps history)
     await updateSiteRecordAsDeleted(env, email);
+
+    return { subscriptionCanceled };
   }
   catch (err)
   {
