@@ -17,6 +17,7 @@ import { createCheckoutSessionForStripe, createPortalSession, getPlanPricesForSt
 import { upsertSubscription, updateSubscriptionStatusById, getSubscriptionByEmail } from "./subscription_db.js";
 import { resolveProcessorForRequest } from "./region_util.js";
 import { verifyOtp } from "./otp_util.js";
+import { runPruneJob } from "./prune_util.js";
 
 function corsHeaders() {
   return {
@@ -37,6 +38,13 @@ function handleResponse(resp){
 }
 
 export default {
+  // Runs on the cron schedule set in wrangler.toml - checks every active
+  // site, reminds anyone close to their free-trial deadline, and removes
+  // anyone past it (unless they've since paid). See prune_util.js.
+  async scheduled(event, env, ctx) {
+    ctx.waitUntil(runPruneJob(env));
+  },
+
   async fetch(request, env, ctx) {
 
     // Handle preflight requests

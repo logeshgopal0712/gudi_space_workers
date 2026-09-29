@@ -1,7 +1,8 @@
-import { ERROR_CODES } from "./constants.js";
+import { ERROR_CODES, CONSTANTS } from "./constants.js";
 import { get_headers, createBranchAndUpdateFile, getDataJsonFromBranch, extractAndUploadImages, updateMetadatafile, deleteBranchFromGithub , constructBranchNameFromCompanyName } from "./website_github_util.js";
-import { insertSiteRecord, getBranchNameByEmail, getPageLinkByEmail, updateSiteRecord, updateSiteRecordAsDeleted, isemailAlreadyHasSiteAndActive, branchExistsAndActive, deleteSiteRecord } from "./website_db.js";
+import { upsertSiteRecord, getSiteCreatedAtByEmail, getBranchNameByEmail, getPageLinkByEmail, updateSiteRecord, updateSiteRecordAsDeleted, isemailAlreadyHasSiteAndActive, branchExistsAndActive } from "./website_db.js";
 import { verifyOtp } from "./otp_util.js";
+import { isEmailSubscriptionActive } from "./subscription_db.js";
 import { notifySiteReadyInBackground } from "./site_email_util.js";
 import { deletePagesDeploymentForBranch, addCustomDomainForBranch, removeCustomDomainForBranch, getPagesDeploymentStatus } from "./website_cloudflare_util.js";
 import { generatePollToken, getPollTokenTarget } from "./poll_token_util.js";
@@ -55,6 +56,23 @@ export async function validateCreateSanity(env, data) {
   if (await branchExistsAndActive(env, safeBranchName))
   {
     throw new Error(ERROR_CODES.COMPANY_ALREADY_USED);
+  }
+
+  // Free trial check - trial clock starts at this email's very first
+  // site creation (getSiteCreatedAtByEmail) and never resets, since
+  // upsertSiteRecord updates the same row in place instead of deleting
+  // and re-inserting. Closes the "delete it, recreate it, get a fresh
+  // trial" loophole. Paying subscribers skip this entirely.
+  const createdAt = await getSiteCreatedAtByEmail(env, email);
+  if (createdAt && !(await isEmailSubscriptionActive(env, email)))
+  {
+    const createdAtDate = new Date(createdAt.replace(" ", "T") + "Z");
+    const ageDays = (Date.now() - createdAtDate.getTime()) / (1000 * 60 * 60 * 24);
+
+    if (ageDays > CONSTANTS.FREE_TRIAL_DAYS)
+    {
+      throw new Error(ERROR_CODES.PAYMENT_REQUIRED);
+    }
   }
 
   return { email, safeBranchName };
@@ -131,12 +149,6 @@ export async function generatePost(request, env, ctx) {
 
   try
   {
-    console.log("Create: Trying to delete site record if already exists for :", safeBranchName);
-
-    await deleteSiteRecord(env, email, safeBranchName);
-
-    console.log("Create: Deleted site record if already exists for :", safeBranchName);
-
     const result = await createBranchAndUpdateFile(env, safeBranchName, data);
     branchCreated = true;
 
@@ -163,9 +175,9 @@ export async function generatePost(request, env, ctx) {
       console.log("Create: Failed to generate poll token for:", safeBranchName, "-", tokenErr.message);
     }
 
-    await insertSiteRecord(env, safeBranchName, data, customUrl);
+    await upsertSiteRecord(env, safeBranchName, data, customUrl);
 
-    console.log("Create: Inserted site record :", safeBranchName + " , previewUrl: " + customUrl);
+    console.log("Create: Upserted site record :", safeBranchName + " , previewUrl: " + customUrl);
 
     // Fire-and-forget: keeps polling the Pages deployment in the
     // background (via ctx.waitUntil, which keeps the worker alive after

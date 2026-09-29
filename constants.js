@@ -9,7 +9,7 @@ export const ERROR_CODES = {
     OTP_EXPIRED: "OTP expired or not found. Please request a new one.",
     INVALID_OTP: "Invalid OTP.",
     OTP_REQUIRED: "OTP required.",
-    PAYMENT_REQUIRED: "Payment required before the website can be created."
+    PAYMENT_REQUIRED: "Your free trial has ended. Please add a plan to continue."
 };
 
 export function knownError(errorMessage)
@@ -27,5 +27,7 @@ export const CONSTANTS = {
   ROOT_DOMAIN : "gudispace.com",          // each generated site becomes <branch>.gudispace.com
   CF_ZONE_ID : "1bd64f54437e92945cac19c12068f3d3",  // find in Cloudflare dashboard: click into gudispace.com zone overview, right sidebar shows "Zone ID"
   STRIPE_PRICE_MONTHLY : "price_1UL3mlIltLXGYmTkQXJWYkbW",
-  STRIPE_PRICE_YEARLY : "price_1UL3mlIltLXGYmTkkRiyBsnU"
+  STRIPE_PRICE_YEARLY : "price_1UL3mlIltLXGYmTkkRiyBsnU",
+  FREE_TRIAL_DAYS : 7,
+  TRIAL_REMINDER_DAYS_BEFORE_DEADLINE : 2
 };
