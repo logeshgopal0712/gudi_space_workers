@@ -13,6 +13,10 @@
 import { knownError } from "./constants.js";
 import { generateOtpPost } from "./otp_util.js";
 import { generatePost, generateGet, generatePut , generateDelete, generateStatusGet, generateSanityCheckPost } from "./worker_service.js";
+import { createCheckoutSessionForStripe, createPortalSession, verifyStripeWebhookSignature, applyStripeWebhookEvent } from "./stripe_util.js";
+import { upsertSubscription, updateSubscriptionStatusById, getSubscriptionByEmail } from "./subscription_db.js";
+import { resolveProcessorForRequest } from "./region_util.js";
+import { verifyOtp } from "./otp_util.js";
 
 function corsHeaders() {
   return {
@@ -41,6 +45,42 @@ export default {
     }
 
     const url = new URL(request.url);
+
+    // Handled separately from everything else below: Stripe needs the
+    // RAW request body to verify the signature (can't go through
+    // request.json() first), and needs a real HTTP status code back
+    // (200 = delivered, non-2xx = please retry) rather than the
+    // always-200-with-success-flag shape handleResponse() gives every
+    // other route.
+    if (url.pathname == "/api/stripeWebhook" && request.method == "POST")
+    {
+      const rawBody = await request.text();
+      const signature = request.headers.get("stripe-signature");
+
+      try
+      {
+        await verifyStripeWebhookSignature(rawBody, signature, env.STRIPE_WEBHOOK_SECRET);
+        const event = JSON.parse(rawBody);
+
+        await applyStripeWebhookEvent(env, event, {
+          upsertSubscription,
+          updateSubscriptionStatusById,
+        });
+
+        return new Response(JSON.stringify({ received: true }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      catch (error)
+      {
+        console.log("Stripe webhook error:", error.message);
+        return new Response(JSON.stringify({ error: error.message }), {
+          status: 400,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+    }
 
     let message="";
     let resp;
@@ -233,6 +273,110 @@ export default {
         catch(error)
         {
           message = "Failed to send OTP.";
+          throw error;
+        }
+      }
+      else if (url.pathname == "/api/createCheckoutSession" && request.method == "POST")
+      {
+        try
+        {
+          const body = await request.json();
+          const processor = resolveProcessorForRequest(request);
+
+          let result;
+          if (processor === "stripe")
+          {
+            result = await createCheckoutSessionForStripe(env, body);
+          }
+          else
+          {
+            // Razorpay not wired up yet - resolveProcessorForRequest already
+            // isolates the region logic, so adding it later is just:
+            // write razorpay_util.js's own createCheckoutSessionForRazorpay,
+            // then replace this branch with a real call to it. It will
+            // never share code with the Stripe function above - the two
+            // APIs are entirely different shapes.
+            throw new Error("Payment for this region isn't available yet. Please try again soon or contact us.");
+          }
+
+          resp = {
+            success: true,
+            processor,
+            url: result.url,
+            message: "Checkout session created."
+          }
+        }
+        catch(error)
+        {
+          message = "Failed to start checkout.";
+          throw error;
+        }
+      }
+      else if (url.pathname == "/api/createPortalSession" && request.method == "POST")
+      {
+        try
+        {
+          const body = await request.json();
+          const { email, otp, returnUrl } = body;
+
+          if (!email)
+          {
+            throw new Error("email is required");
+          }
+          if (!returnUrl)
+          {
+            throw new Error("returnUrl is required");
+          }
+
+          // Same reasoning as Modify/Delete - confirm it's really the
+          // account owner before letting them into a page that can
+          // cancel billing or swap the card on file.
+          await verifyOtp(env, email, otp);
+
+          const sub = await getSubscriptionByEmail(env, email);
+          if (!sub?.customer_id)
+          {
+            throw new Error("No subscription found for this email.");
+          }
+
+          const result = await createPortalSession(env, {
+            customerId: sub.customer_id,
+            returnUrl,
+          });
+
+          resp = {
+            success: true,
+            url: result.url,
+            message: "Billing portal session created."
+          }
+        }
+        catch(error)
+        {
+          message = "Failed to open billing portal.";
+          throw error;
+        }
+      }
+      else if (url.pathname == "/api/paymentStatus" && request.method == "GET")
+      {
+        try
+        {
+          const email = url.searchParams.get("email");
+          if (!email)
+          {
+            throw new Error("email is required");
+          }
+
+          const sub = await getSubscriptionByEmail(env, email);
+
+          resp = {
+            success: true,
+            status: sub?.status || "none",
+            plan: sub?.plan || null
+          }
+        }
+        catch(error)
+        {
+          message = "Failed to check payment status.";
           throw error;
         }
       }

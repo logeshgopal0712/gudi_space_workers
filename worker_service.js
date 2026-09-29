@@ -2,6 +2,7 @@ import { ERROR_CODES } from "./constants.js";
 import { get_headers, createBranchAndUpdateFile, getDataJsonFromBranch, extractAndUploadImages, updateMetadatafile, deleteBranchFromGithub , constructBranchNameFromCompanyName } from "./website_github_util.js";
 import { insertSiteRecord, getBranchNameByEmail, getPageLinkByEmail, updateSiteRecord, updateSiteRecordAsDeleted, isemailAlreadyHasSiteAndActive, branchExistsAndActive, deleteSiteRecord } from "./website_db.js";
 import { verifyOtp } from "./otp_util.js";
+import { isEmailSubscriptionActive } from "./subscription_db.js";
 import { deletePagesDeploymentForBranch, addCustomDomainForBranch, removeCustomDomainForBranch, getPagesDeploymentStatus } from "./website_cloudflare_util.js";
 import { generatePollToken, getPollTokenTarget } from "./poll_token_util.js";
 
@@ -120,6 +121,16 @@ export async function generatePost(request, env) {
   const { otp, data } = body;
 
   const { email, safeBranchName } = await validateCreateSanity(env, data);
+
+  // Defense-in-depth, same reasoning as validateCreateSanity being
+  // re-checked here even though the frontend already ran it via
+  // generateSanityCheckPost - never trust that a prior step was actually
+  // honored, re-verify the thing that actually matters right before the
+  // side-effecting work happens.
+  if (!(await isEmailSubscriptionActive(env, email)))
+  {
+    throw new Error(ERROR_CODES.PAYMENT_REQUIRED);
+  }
 
   await verifyOtp(env, email, otp);
 
