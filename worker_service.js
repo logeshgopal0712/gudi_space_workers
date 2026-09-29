@@ -2,7 +2,7 @@ import { ERROR_CODES } from "./constants.js";
 import { get_headers, createBranchAndUpdateFile, getDataJsonFromBranch, extractAndUploadImages, updateMetadatafile, deleteBranchFromGithub , constructBranchNameFromCompanyName } from "./website_github_util.js";
 import { insertSiteRecord, getBranchNameByEmail, getPageLinkByEmail, updateSiteRecord, updateSiteRecordAsDeleted, isemailAlreadyHasSiteAndActive, branchExistsAndActive, deleteSiteRecord } from "./website_db.js";
 import { verifyOtp } from "./otp_util.js";
-import { isEmailSubscriptionActive } from "./subscription_db.js";
+import { notifySiteReadyInBackground } from "./site_email_util.js";
 import { deletePagesDeploymentForBranch, addCustomDomainForBranch, removeCustomDomainForBranch, getPagesDeploymentStatus } from "./website_cloudflare_util.js";
 import { generatePollToken, getPollTokenTarget } from "./poll_token_util.js";
 
@@ -109,7 +109,7 @@ export async function generateSanityCheckPost(request, env) {
   return { branchName: safeBranchName };
 }
 
-export async function generatePost(request, env) {
+export async function generatePost(request, env, ctx) {
   // 1. Get input
   let body;
   try {
@@ -121,16 +121,6 @@ export async function generatePost(request, env) {
   const { otp, data } = body;
 
   const { email, safeBranchName } = await validateCreateSanity(env, data);
-
-  // Defense-in-depth, same reasoning as validateCreateSanity being
-  // re-checked here even though the frontend already ran it via
-  // generateSanityCheckPost - never trust that a prior step was actually
-  // honored, re-verify the thing that actually matters right before the
-  // side-effecting work happens.
-  if (!(await isEmailSubscriptionActive(env, email)))
-  {
-    throw new Error(ERROR_CODES.PAYMENT_REQUIRED);
-  }
 
   await verifyOtp(env, email, otp);
 
@@ -176,6 +166,24 @@ export async function generatePost(request, env) {
     await insertSiteRecord(env, safeBranchName, data, customUrl);
 
     console.log("Create: Inserted site record :", safeBranchName + " , previewUrl: " + customUrl);
+
+    // Fire-and-forget: keeps polling the Pages deployment in the
+    // background (via ctx.waitUntil, which keeps the worker alive after
+    // the response is already sent) and only emails the "your site is
+    // ready" link once it's actually live - not the moment this request
+    // returns. Runs independently of the browser/tab staying open.
+    if (ctx && typeof ctx.waitUntil === "function")
+    {
+      ctx.waitUntil(
+        notifySiteReadyInBackground(env, {
+          email,
+          companyName: data?.company?.companyName,
+          branchName: safeBranchName,
+          commitSha: result.commitSha,
+          siteUrl: customUrl,
+        })
+      );
+    }
 
     return { previewUrl: customUrl, branch: safeBranchName, token: pollToken };
   }

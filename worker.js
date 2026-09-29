@@ -144,7 +144,7 @@ export default {
       {
         try
         {
-          const result = await generatePost(request, env);
+          const result = await generatePost(request, env, ctx);
 
           resp = {
             success: true,
