@@ -65,6 +65,37 @@ export async function createCheckoutSessionForStripe(env, { email, plan, success
   return { url: data.url, sessionId: data.id };
 }
 
+async function fetchStripePrice(env, priceId) {
+  const response = await fetch(`${STRIPE_API_BASE}/prices/${priceId}`, {
+    headers: { Authorization: `Bearer ${env.STRIPE_SECRET_KEY}` },
+  });
+  const data = await response.json();
+
+  if (!response.ok) {
+    console.log("Stripe price fetch failed:", data);
+    throw new Error(data?.error?.message || "Could not fetch plan price.");
+  }
+
+  return data;
+}
+
+// ---------------------------------------------------------
+// Returns the current live monthly/yearly prices from Stripe, so the
+// frontend never has to hardcode a dollar amount - change the price in
+// the Stripe dashboard and this reflects it immediately, no deploy.
+// ---------------------------------------------------------
+export async function getPlanPricesForStripe(env) {
+  const [monthly, yearly] = await Promise.all([
+    fetchStripePrice(env, CONSTANTS.STRIPE_PRICE_MONTHLY),
+    fetchStripePrice(env, CONSTANTS.STRIPE_PRICE_YEARLY),
+  ]);
+
+  return {
+    monthly: { amount: monthly.unit_amount, currency: monthly.currency },
+    yearly: { amount: yearly.unit_amount, currency: yearly.currency },
+  };
+}
+
 // ---------------------------------------------------------
 // Creates a Stripe Billing Portal session for an existing customer - the
 // Stripe-hosted page where they can cancel, switch between the

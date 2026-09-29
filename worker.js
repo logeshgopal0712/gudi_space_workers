@@ -13,7 +13,7 @@
 import { knownError } from "./constants.js";
 import { generateOtpPost } from "./otp_util.js";
 import { generatePost, generateGet, generatePut , generateDelete, generateStatusGet, generateSanityCheckPost } from "./worker_service.js";
-import { createCheckoutSessionForStripe, createPortalSession, verifyStripeWebhookSignature, applyStripeWebhookEvent } from "./stripe_util.js";
+import { createCheckoutSessionForStripe, createPortalSession, getPlanPricesForStripe, verifyStripeWebhookSignature, applyStripeWebhookEvent } from "./stripe_util.js";
 import { upsertSubscription, updateSubscriptionStatusById, getSubscriptionByEmail } from "./subscription_db.js";
 import { resolveProcessorForRequest } from "./region_util.js";
 import { verifyOtp } from "./otp_util.js";
@@ -273,6 +273,37 @@ export default {
         catch(error)
         {
           message = "Failed to send OTP.";
+          throw error;
+        }
+      }
+      else if (url.pathname == "/api/planPrices" && request.method == "GET")
+      {
+        try
+        {
+          const processor = resolveProcessorForRequest(request);
+
+          let prices;
+          if (processor === "stripe")
+          {
+            prices = await getPlanPricesForStripe(env);
+          }
+          else
+          {
+            // Razorpay not wired up yet - same stub reasoning as
+            // /api/createCheckoutSession above.
+            throw new Error("Pricing for this region isn't available yet.");
+          }
+
+          resp = {
+            success: true,
+            processor,
+            prices,
+            message: "Plan prices fetched."
+          }
+        }
+        catch(error)
+        {
+          message = "Failed to fetch plan prices.";
           throw error;
         }
       }
