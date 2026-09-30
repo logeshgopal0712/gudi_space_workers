@@ -21,14 +21,55 @@
 const TOKEN_PREFIX = "buildtoken:";
 const TOKEN_TTL_SECONDS = 600; // 10 minutes - generous buffer over expected build time
 
-export async function generatePollToken(env, branchName, commitSha = null) {
+export async function generatePollToken(env, branchName, commitSha = null, email = null, companyName = null) {
   const token = crypto.randomUUID();
   await env.OTP_STORE.put(
     `${TOKEN_PREFIX}${token}`,
-    JSON.stringify({ branchName, commitSha }),
+    JSON.stringify({ branchName, commitSha, email, companyName }),
     { expirationTtl: TOKEN_TTL_SECONDS },
   );
   return token;
+}
+
+// ---------------------------------------------------------
+// Every entry that still carries an email - i.e. every create (not
+// modify) whose "site is ready" email hasn't been sent yet. Used by the
+// once-a-minute cron job (see site_email_util.js's
+// checkPendingSiteReadyNotifications) instead of a new DB table: this
+// KV entry already exists for polling, already expires on its own after
+// TOKEN_TTL_SECONDS if nothing ever picks it up, so there's nothing new
+// to keep clean.
+// ---------------------------------------------------------
+export async function listPendingBuildTokensWithEmail(env) {
+  const results = [];
+  let cursor;
+
+  do {
+    const page = await env.OTP_STORE.list({ prefix: TOKEN_PREFIX, cursor });
+
+    for (const key of page.keys) {
+      const raw = await env.OTP_STORE.get(key.name);
+      if (!raw) continue;
+
+      try {
+        const parsed = JSON.parse(raw);
+        if (parsed && parsed.email) {
+          results.push({ keyName: key.name, ...parsed });
+        }
+      } catch (err) {
+        // Old-format token (bare branch name string, pre-dates email
+        // being stored here) - nothing to notify, skip it.
+      }
+    }
+
+    cursor = page.list_complete ? undefined : page.cursor;
+  } while (cursor);
+
+  return results;
+}
+
+export async function deletePollToken(env, keyName) {
+  await env.OTP_STORE.delete(keyName);
 }
 
 // Returns { branchName, commitSha } for a token, or null if it's missing

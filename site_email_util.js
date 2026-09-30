@@ -1,49 +1,52 @@
 import { getPagesDeploymentStatus } from "./website_cloudflare_util.js";
+import { listPendingBuildTokensWithEmail, deletePollToken } from "./poll_token_util.js";
 import { CONSTANTS } from "./constants.js";
 
-const POLL_INTERVAL_MS = 10000; // 10s between checks
-const MAX_POLL_ATTEMPTS = 30;   // ~5 minutes total before giving up
-
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
 // ---------------------------------------------------------
-// Waits for the Pages deployment to actually go live, then sends the
-// "your site is ready" email. Meant to be run inside ctx.waitUntil() so
-// it keeps going in the background after the response has already gone
-// back to the browser - the email still goes out even if the user
-// closes the tab, reloads, or loses power right after clicking Create.
+// Runs once a minute (see worker.js's `scheduled` export). Checks every
+// pending "site is being built" KV entry that still has an email
+// attached (i.e. every create that hasn't been notified yet), and sends
+// the "your site is ready" email the moment each one is actually live.
+//
+// Deliberately NOT a long-running ctx.waitUntil() poll attached to the
+// create request - Cloudflare only guarantees ~30 seconds of extra time
+// for that, which real deployments regularly exceed. A cron job has its
+// own 15-minute budget per run and isn't tied to any request's
+// lifetime, so it isn't at risk of being cut off mid-check.
 // ---------------------------------------------------------
-export async function notifySiteReadyInBackground(env, { email, companyName, branchName, commitSha, siteUrl }) {
-  try
-  {
-    let ready = false;
+export async function checkPendingSiteReadyNotifications(env) {
+  const pending = await listPendingBuildTokensWithEmail(env);
+  let sent = 0;
 
-    for (let attempt = 0; attempt < MAX_POLL_ATTEMPTS; attempt++)
-    {
-      const result = await getPagesDeploymentStatus(env, branchName, commitSha);
-      if (result.ready)
-      {
-        ready = true;
-        break;
+  for (const entry of pending) {
+    try {
+      const result = await getPagesDeploymentStatus(env, entry.branchName, entry.commitSha);
+
+      if (result.ready) {
+        const siteUrl = `https://${entry.branchName}.${CONSTANTS.ROOT_DOMAIN}`;
+        await sendSiteReadyEmail(env, {
+          email: entry.email,
+          companyName: entry.companyName,
+          siteUrl,
+        });
+        await deletePollToken(env, entry.keyName);
+        sent++;
       }
-      await sleep(POLL_INTERVAL_MS);
+      // Not ready yet - leave it. Either the next run (1 minute later)
+      // catches it, or the KV entry's own TTL expires it eventually if
+      // the build never finishes.
     }
-
-    if (!ready)
+    catch (err)
     {
-      console.log("notifySiteReadyInBackground: gave up waiting for deployment to go live:", branchName);
-      return;
+      console.log("checkPendingSiteReadyNotifications: failed for", entry.branchName, "-", err.message);
     }
+  }
 
-    await sendSiteReadyEmail(env, { email, companyName, siteUrl });
-    console.log("notifySiteReadyInBackground: sent site-ready email for:", branchName);
+  if (pending.length > 0) {
+    console.log(`checkPendingSiteReadyNotifications: checked ${pending.length}, sent ${sent}`);
   }
-  catch (err)
-  {
-    console.log("notifySiteReadyInBackground: failed for", branchName, "-", err.message);
-  }
+
+  return { checked: pending.length, sent };
 }
 
 async function sendSiteReadyEmail(env, { email, companyName, siteUrl }) {

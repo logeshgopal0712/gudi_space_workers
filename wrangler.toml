@@ -22,7 +22,10 @@ binding = "OTP_STORE"
 id = "ef69a2fc7c1941dfa1624fc49ecb721e"
 
 [triggers]
-crons = ["0 9 * * *"] # runs once daily at 9am UTC - checks trial reminders/prunes
+crons = [
+  "0 9 * * *",  # once daily at 9am UTC - trial reminders/prunes
+  "*/1 * * * *" # every minute - sends "your site is ready" emails once live
+]
 
 [observability.logs]
 enabled = true

@@ -18,6 +18,7 @@ import { upsertSubscription, updateSubscriptionStatusById, getSubscriptionByEmai
 import { resolveProcessorForRequest } from "./region_util.js";
 import { verifyOtp } from "./otp_util.js";
 import { runPruneJob } from "./prune_util.js";
+import { checkPendingSiteReadyNotifications } from "./site_email_util.js";
 
 function corsHeaders() {
   return {
@@ -38,11 +39,20 @@ function handleResponse(resp){
 }
 
 export default {
-  // Runs on the cron schedule set in wrangler.toml - checks every active
-  // site, reminds anyone close to their free-trial deadline, and removes
-  // anyone past it (unless they've since paid). See prune_util.js.
+  // Two schedules share this one export - see wrangler.toml for the cron
+  // expressions. event.cron tells us which one fired:
+  //  - once a minute: checkPendingSiteReadyNotifications - "your site is
+  //    ready" emails, independent of the create request's own lifetime.
+  //  - once a day: runPruneJob - free-trial reminders + removal.
   async scheduled(event, env, ctx) {
-    ctx.waitUntil(runPruneJob(env));
+    if (event.cron === "*/1 * * * *")
+    {
+      ctx.waitUntil(checkPendingSiteReadyNotifications(env));
+    }
+    else
+    {
+      ctx.waitUntil(runPruneJob(env));
+    }
   },
 
   async fetch(request, env, ctx) {
@@ -152,7 +162,7 @@ export default {
       {
         try
         {
-          const result = await generatePost(request, env, ctx);
+          const result = await generatePost(request, env);
 
           resp = {
             success: true,

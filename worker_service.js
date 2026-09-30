@@ -4,7 +4,6 @@ import { upsertSiteRecord, getSiteCreatedAtByEmail, getBranchNameByEmail, getPag
 import { verifyOtp } from "./otp_util.js";
 import { isEmailSubscriptionActive, getSubscriptionByEmail } from "./subscription_db.js";
 import { cancelSubscriptionForStripe } from "./stripe_util.js";
-import { notifySiteReadyInBackground } from "./site_email_util.js";
 import { deletePagesDeploymentForBranch, addCustomDomainForBranch, removeCustomDomainForBranch, getPagesDeploymentStatus } from "./website_cloudflare_util.js";
 import { generatePollToken, getPollTokenTarget } from "./poll_token_util.js";
 
@@ -128,7 +127,7 @@ export async function generateSanityCheckPost(request, env) {
   return { branchName: safeBranchName };
 }
 
-export async function generatePost(request, env, ctx) {
+export async function generatePost(request, env) {
   // 1. Get input
   let body;
   try {
@@ -166,10 +165,21 @@ export async function generatePost(request, env, ctx) {
     // customer stare at a frozen "Create" button. Carries the exact
     // data.json commit SHA so the status check can't lock onto an earlier
     // deployment of this same (brand new) branch - see getPagesDeploymentStatus.
+    // Carries the email + company name alongside the branch/commit so the
+    // once-a-minute cron job (site_email_util.js's
+    // checkPendingSiteReadyNotifications) can send the "your site is
+    // ready" email itself once it's actually live - independent of this
+    // request's own lifetime or the browser staying open.
     let pollToken = null;
     try
     {
-      pollToken = await generatePollToken(env, safeBranchName, result.commitSha);
+      pollToken = await generatePollToken(
+        env,
+        safeBranchName,
+        result.commitSha,
+        email,
+        data?.company?.companyName,
+      );
     }
     catch (tokenErr)
     {
@@ -179,24 +189,6 @@ export async function generatePost(request, env, ctx) {
     await upsertSiteRecord(env, safeBranchName, data, customUrl);
 
     console.log("Create: Upserted site record :", safeBranchName + " , previewUrl: " + customUrl);
-
-    // Fire-and-forget: keeps polling the Pages deployment in the
-    // background (via ctx.waitUntil, which keeps the worker alive after
-    // the response is already sent) and only emails the "your site is
-    // ready" link once it's actually live - not the moment this request
-    // returns. Runs independently of the browser/tab staying open.
-    if (ctx && typeof ctx.waitUntil === "function")
-    {
-      ctx.waitUntil(
-        notifySiteReadyInBackground(env, {
-          email,
-          companyName: data?.company?.companyName,
-          branchName: safeBranchName,
-          commitSha: result.commitSha,
-          siteUrl: customUrl,
-        })
-      );
-    }
 
     return { previewUrl: customUrl, branch: safeBranchName, token: pollToken };
   }
