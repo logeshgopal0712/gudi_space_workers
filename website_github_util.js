@@ -22,22 +22,26 @@ export function constructBranchNameFromCompanyName(companyName)
 
 // Decodes a base64 data URL ("data:image/jpeg;base64,....") and commits it
 // to the given path on the given branch via GitHub's contents API.
-async function uploadImageToGithub(headers, branchName, path, dataUrl) {
+async function uploadImageToGithub(headers, branchName, path, dataUrl, { checkExisting = true } = {}) {
   // dataUrl looks like: data:image/jpeg;base64,AAAA....
   const base64Content = dataUrl.split(",")[1];
   if (!base64Content) {
     throw new Error(`Invalid image data for path ${path}`);
   }
 
-  // Check if file already exists on this branch (only matters if branch was reused)
+  // Check if file already exists on this branch. Skipped entirely on a
+  // brand-new create branch (checkExisting: false) - nothing can already
+  // be there, so this GET is pure wasted latency in that case.
   let existingSha = null;
-  const existingRes = await fetch(
-    `https://api.github.com/repos/${CONSTANTS.GITHUB_OWNER}/${CONSTANTS.GITHUB_REPO}/contents/${path}?ref=${branchName}`,
-    { headers }
-  );
-  if (existingRes.ok) {
-    const existingInfo = await existingRes.json();
-    existingSha = existingInfo.sha;
+  if (checkExisting) {
+    const existingRes = await fetch(
+      `https://api.github.com/repos/${CONSTANTS.GITHUB_OWNER}/${CONSTANTS.GITHUB_REPO}/contents/${path}?ref=${branchName}`,
+      { headers }
+    );
+    if (existingRes.ok) {
+      const existingInfo = await existingRes.json();
+      existingSha = existingInfo.sha;
+    }
   }
 
   const putBody = {
@@ -68,7 +72,7 @@ async function uploadImageToGithub(headers, branchName, path, dataUrl) {
 // uploads each image to GitHub at its given path,
 // and strips the *_src key out of the returned data object.
 // ---------------------------------------------------------
-export async function extractAndUploadImages(env, branchName, data) {
+export async function extractAndUploadImages(env, branchName, data, { isNewBranch = false } = {}) {
   const headers = await get_headers(env);
 
   // Collect every image {path, src} pair to upload, from all the known locations
@@ -114,9 +118,17 @@ export async function extractAndUploadImages(env, branchName, data) {
     });
   }
 
-  // Upload each image to GitHub (one commit per image, on the new branch)
+  // Upload each image to GitHub (one commit per image, on the branch).
+  // NOTE: these must stay sequential. GitHub's Contents API does one
+  // commit per PUT and each commit fast-forwards the branch ref - firing
+  // several PUTs at once (even at different file paths) makes them race
+  // to move that same ref, and every loser gets a 409 "is at X but
+  // expected Y" (found the hard way). Only the existence-check skip on a
+  // brand-new create branch is safe to keep.
   for (const job of imageJobs) {
-    await uploadImageToGithub(headers, branchName, job.path, job.src);
+    await uploadImageToGithub(headers, branchName, job.path, job.src, {
+      checkExisting: !isNewBranch,
+    });
     job.clear(); // remove *_src from the data object now that it's stored
   }
 
@@ -167,6 +179,14 @@ export async function updateMetadatafile(cleanedData /*json with no src data for
   if (!updateRes.ok) {
     throw new Error(`Failed to update file: ${await updateRes.text()}`);
   }
+
+  // Hand back the commit SHA for this exact data.json write, so callers
+  // can poll for the Pages deployment built from THIS commit specifically -
+  // branch creation and each image upload are separate commits too, each
+  // triggering their own build, so "some deployment for this branch" can
+  // resolve to an earlier one that still has main's blank data.json.
+  const updateInfo = await updateRes.json();
+  return updateInfo?.commit?.sha || null;
 }
 
 export async function createBranchAndUpdateFile(env, branchName, data) {
@@ -208,15 +228,15 @@ export async function createBranchAndUpdateFile(env, branchName, data) {
 
   // 2c. Extract all images from the payload, upload each one to the new branch,
   //     and strip the *_src fields out of `data` before it gets committed as JSON.
-  const cleanedData = await extractAndUploadImages(env, branchName, data);
+  const cleanedData = await extractAndUploadImages(env, branchName, data, { isNewBranch: true });
 
   // 3a. update metadata file. if already exists, fetch first and update.
-  await updateMetadatafile(cleanedData, branchName, headers);
+  const commitSha = await updateMetadatafile(cleanedData, branchName, headers);
 
   // 4. Build the preview URL Cloudflare Pages will auto-generate for this branch
   const previewUrl = `https://${branchName}.${CONSTANTS.PAGES_PROJECT}`;
 
-  return { previewUrl };
+  return { previewUrl, commitSha };
 }
 /*
 export async function getDataJsonFromBranch(env, branchName) {

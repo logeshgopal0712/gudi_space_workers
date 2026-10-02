@@ -8,7 +8,8 @@ export const ERROR_CODES = {
     //FAILED_TO_SEND_OTP: "Failed to send OTP.",
     OTP_EXPIRED: "OTP expired or not found. Please request a new one.",
     INVALID_OTP: "Invalid OTP.",
-    OTP_REQUIRED: "OTP required."
+    OTP_REQUIRED: "OTP required.",
+    PAYMENT_REQUIRED: "Your free trial has ended. Please add a plan to continue."
 };
 
 export function knownError(errorMessage)
@@ -24,5 +25,9 @@ export const CONSTANTS = {
   FILE_PATH : "data/data.json",          // path to the file inside the repo
   PAGES_PROJECT : "gudi-space-generated.pages.dev", // e.g. "my-site" -> my-site.pages.dev
   ROOT_DOMAIN : "gudispace.com",          // each generated site becomes <branch>.gudispace.com
-  CF_ZONE_ID : "1bd64f54437e92945cac19c12068f3d3"  // find in Cloudflare dashboard: click into gudispace.com zone overview, right sidebar shows "Zone ID"
+  CF_ZONE_ID : "1bd64f54437e92945cac19c12068f3d3",  // find in Cloudflare dashboard: click into gudispace.com zone overview, right sidebar shows "Zone ID"
+  STRIPE_PRICE_MONTHLY : "price_1UL3mlIltLXGYmTkQXJWYkbW",
+  STRIPE_PRICE_YEARLY : "price_1UL3mlIltLXGYmTkkRiyBsnU",
+  FREE_TRIAL_DAYS : 7,
+  TRIAL_REMINDER_DAYS_BEFORE_DEADLINE : 2
 };

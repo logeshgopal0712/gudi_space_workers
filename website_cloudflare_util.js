@@ -144,3 +144,85 @@ export async function removeCustomDomainForBranch(env, branchName) {
     console.log("removeCustomDomainForBranch: Failed to remove Pages custom domain:", await domainDelRes.text());
   }
 }
+
+// ---------------------------------------------------------
+// Single, non-looping check of a branch's Pages deployment status.
+// Used by the "/api/generateStatus" poll endpoint - the frontend calls
+// this repeatedly (every few seconds) and drives its own timer/stage
+// UI, instead of the Worker blocking a single request for a long time.
+//
+// Returns { ready, status }:
+//   ready  - true only once latest_stage.status is "success"
+//   status - the raw stage status ("active"/"idle"/"success"/"failure"/
+//            "canceled"), or "pending" if the deployment hasn't shown
+//            up in the list yet (e.g. called right after branch creation).
+// ---------------------------------------------------------
+export async function getPagesDeploymentStatus(env, branchName, commitSha = null) {
+  const headers = await getCfHeaders(env);
+
+  const listRes = await fetch(
+    `https://api.cloudflare.com/client/v4/accounts/${CONSTANTS.CF_ACCOUNT_ID}/pages/projects/${CONSTANTS.CF_PAGES_PROJECT_NAME}/deployments`,
+    { headers }
+  );
+
+  if (!listRes.ok) {
+    console.log("getPagesDeploymentStatus: failed to list deployments:", await listRes.text());
+    throw new Error("Failed to check deployment status");
+  }
+
+  const listData = await listRes.json();
+
+  // Creating/modifying a site is actually several commits to the same
+  // branch (branch creation off main, one per uploaded image, then the
+  // real data.json) - Cloudflare Pages builds each commit as its own
+  // deployment. Matching by branch alone can resolve to an EARLIER one
+  // (e.g. the branch-creation commit, which still has main's blank
+  // template data.json) instead of the one that actually carries the
+  // real data. Match the exact commit when we have it; branch-only match
+  // is just a fallback for tokens issued before this existed.
+  const deployment = commitSha
+    ? listData.result.find(
+        (d) => d.deployment_trigger?.metadata?.commit_hash === commitSha
+      )
+    : listData.result.find(
+        (d) => d.deployment_trigger?.metadata?.branch === branchName
+      );
+
+  const status = deployment?.latest_stage?.status || "pending";
+
+  if (status !== "success") {
+    // Covers "pending"/"idle"/"active" (still building) as well as a
+    // genuine "failure"/"canceled" - either way we're not ready yet.
+    return { ready: false, status };
+  }
+
+  // Even once the right build reports "success", confirm the
+  // customer-facing custom domain (branchName.ROOT_DOMAIN) is actually
+  // serving it - domain activation and Cloudflare's edge cache can both
+  // lag behind the build finishing. Check for a real, non-empty company
+  // name specifically (not just that the "company" key exists, since
+  // that key is always present even on a blank template) - a real site
+  // always has one, since it's required to create the branch at all.
+  try {
+    const liveCheck = await fetch(
+      `https://${branchName}.${CONSTANTS.ROOT_DOMAIN}/data/data.json`,
+      { cf: { cacheTtl: 0, cacheEverything: false } }
+    );
+
+    if (!liveCheck.ok) {
+      console.log(`getPagesDeploymentStatus: live domain check for ${branchName} returned ${liveCheck.status}`);
+      return { ready: false, status: "pending" };
+    }
+
+    const liveData = await liveCheck.json();
+    if (!liveData?.company?.companyName) {
+      console.log(`getPagesDeploymentStatus: live domain check for ${branchName} still shows a blank/default company name`);
+      return { ready: false, status: "pending" };
+    }
+  } catch (err) {
+    console.log(`getPagesDeploymentStatus: live domain check for ${branchName} failed:`, err.message);
+    return { ready: false, status: "pending" };
+  }
+
+  return { ready: true, status: "success" };
+}
