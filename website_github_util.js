@@ -4,6 +4,30 @@
 //const PAGES_PROJECT = "cloudflaretest-aa3.pages.dev"; // e.g. "my-site" -> my-site.pages.dev
 import { ERROR_CODES , CONSTANTS } from "./constants.js";
 
+// Plain btoa()/atob() only handle Latin1 (char codes 0-255). Company data
+// routinely contains characters outside that range - smart quotes, em
+// dashes, emoji, non-English names - pasted in from Word/Docs/iOS
+// autocorrect, which crashes a plain btoa() with "can only operate on
+// characters in the Latin1 range". These wrap the UTF-8 bytes instead, so
+// any Unicode content round-trips safely to/from GitHub's base64 API.
+function toBase64Utf8(str) {
+  const bytes = new TextEncoder().encode(str);
+  let binary = "";
+  for (let i = 0; i < bytes.length; i++) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+  return btoa(binary);
+}
+
+function fromBase64Utf8(base64) {
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return new TextDecoder().decode(bytes);
+}
+
 export async function get_headers(env)
 {
   return {
@@ -157,7 +181,7 @@ export async function updateMetadatafile(cleanedData /*json with no src data for
 
   // b 
   // Create/update file content (must be base64 encoded) - now uses cleanedData, no *_src fields
-  const newContent = btoa(JSON.stringify(cleanedData, null, 2));
+  const newContent = toBase64Utf8(JSON.stringify(cleanedData, null, 2));
 
   const putBody = {
     message: `Update ${CONSTANTS.FILE_PATH} for branch ${branchName}`,
@@ -306,7 +330,7 @@ export async function getDataJsonFromBranch(env, branchName) {
   }
 
   const blobInfo = await blobRes.json();
-  const decodedContent = atob(blobInfo.content.replace(/\n/g, ""));
+  const decodedContent = fromBase64Utf8(blobInfo.content.replace(/\n/g, ""));
 
   if (decodedContent.trim() === "") {
     throw new Error(`data.json content is empty for branch ${branchName}`);
