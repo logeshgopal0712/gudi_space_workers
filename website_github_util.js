@@ -250,17 +250,33 @@ export async function createBranchAndUpdateFile(env, branchName, data) {
     throw new Error(`Failed to create branch: ${err}`);
   }
 
-  // 2c. Extract all images from the payload, upload each one to the new branch,
-  //     and strip the *_src fields out of `data` before it gets committed as JSON.
-  const cleanedData = await extractAndUploadImages(env, branchName, data, { isNewBranch: true });
+  // From here on, the branch exists on GitHub - it has "reserved" this
+  // company name. If anything below fails (image upload, a bad
+  // character crashing the data.json write, etc), the branch must be
+  // deleted again before we throw - otherwise the name stays reserved
+  // forever even though no real site exists, and every retry fails with
+  // COMPANY_ALREADY_USED even after the underlying bug is fixed.
+  try {
+    // 2c. Extract all images from the payload, upload each one to the new branch,
+    //     and strip the *_src fields out of `data` before it gets committed as JSON.
+    const cleanedData = await extractAndUploadImages(env, branchName, data, { isNewBranch: true });
 
-  // 3a. update metadata file. if already exists, fetch first and update.
-  const commitSha = await updateMetadatafile(cleanedData, branchName, headers);
+    // 3a. update metadata file. if already exists, fetch first and update.
+    const commitSha = await updateMetadatafile(cleanedData, branchName, headers);
 
-  // 4. Build the preview URL Cloudflare Pages will auto-generate for this branch
-  const previewUrl = `https://${branchName}.${CONSTANTS.PAGES_PROJECT}`;
+    // 4. Build the preview URL Cloudflare Pages will auto-generate for this branch
+    const previewUrl = `https://${branchName}.${CONSTANTS.PAGES_PROJECT}`;
 
-  return { previewUrl, commitSha };
+    return { previewUrl, commitSha };
+  } catch (err) {
+    console.log("createBranchAndUpdateFile: failed after branch creation, rolling back branch:", branchName, err.message);
+    try {
+      await deleteBranchFromGithub(headers, branchName);
+    } catch (cleanupErr) {
+      console.log("createBranchAndUpdateFile: cleanup delete also failed for branch:", branchName, cleanupErr.message);
+    }
+    throw err;
+  }
 }
 /*
 export async function getDataJsonFromBranch(env, branchName) {
